@@ -10,7 +10,7 @@ from recsys_utils import get_vert_labels, model_eval, eval_cluster, write_eval
 from iterator import MINDCatIterator as catiterator
 from init_params import nrms_init_params
 import numpy as np
-from ganer.nrms_base import NRMSModelDECCLImprsVertWAKLGL
+from clurec.nrms_base import NRMSModelDECCLImprsVertWAKLGL
 
 
 class GroupScore(layers.Layer):

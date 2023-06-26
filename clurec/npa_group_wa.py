@@ -4,18 +4,17 @@ from tensorflow.keras import backend as K
 import tensorflow as tf
 import argparse
 import sys
-import os
 
-from python_utils.data import read
-from group_layers import WeightedAverage
+from group_layers import  WeightedAverage
 from recsys_utils import get_vert_labels, model_eval, eval_cluster, write_eval
 from iterator import MINDCatIterator as catiterator
 from init_params import nrms_init_params
+from submit_predition_tf import write_prediction_file
 
-from ganer.lstur_base import LSTURModelDECCLImprsVertWAKLGL
-from ganer.nrms_group_wa import GroupScore
+from clurec.npa_base import NPAModelDECCLImprsVertWAKLGL
+from clurec.nrms_group_wa import GroupScore
 
-class LSTURGroupModelDECCLImprsVertWAKLGL(LSTURModelDECCLImprsVertWAKLGL):
+class NPAGroupModelDECCLImprsVertWAKLGL(NPAModelDECCLImprsVertWAKLGL):
 
     def __init__(
             self,
@@ -34,12 +33,12 @@ class LSTURGroupModelDECCLImprsVertWAKLGL(LSTURModelDECCLImprsVertWAKLGL):
 
 
 
-    def _build_lstur(self):
-        """The main function to create LSTUR's logic. The core of LSTUR
+    def _build_npa(self):
+        """The main function to create NPA's logic. The core of NPA
         is a user encoder and a news encoder.
         Returns:
             object: a model used to train.
-            object: a model used to evaluate and inference.
+            object: a model used to evaluate and predict.
         """
         hparams = self.hparams
 
@@ -61,11 +60,29 @@ class LSTURGroupModelDECCLImprsVertWAKLGL(LSTURModelDECCLImprsVertWAKLGL):
         )
         user_indexes = keras.Input(shape=(1,), dtype="int32")
 
+        nuser_index = layers.Reshape((1, 1))(user_indexes)
+        repeat_uindex = layers.Concatenate(axis=-2)(
+            [nuser_index] * (hparams.npratio + 1)
+        )
+        pred_title_uindex = layers.Concatenate(axis=-1)(
+            [pred_input_title, repeat_uindex]
+        )
+        pred_title_uindex_one = layers.Concatenate()(
+            [pred_title_one_reshape, user_indexes]
+        )
+
         embedding_layer = layers.Embedding(
             self.word2vec_embedding.shape[0],
             hparams.word_emb_dim,
             weights=[self.word2vec_embedding],
             trainable=True,
+        )
+
+        user_embedding_layer = layers.Embedding(
+            len(self.train_iterator.uid2index),
+            hparams.user_emb_dim,
+            trainable=True,
+            embeddings_initializer="zeros",
         )
 
         vert_embedding_layer = layers.Embedding(
@@ -77,15 +94,16 @@ class LSTURGroupModelDECCLImprsVertWAKLGL(LSTURModelDECCLImprsVertWAKLGL):
 
         vertencoder = self._build_vertencoder(vert_embedding_layer)
 
-        titleencoder = self._build_newsencoder(embedding_layer)
-        self.userencoder = self._build_userencoder(titleencoder, type=hparams.type)
-        self.newsencoder = titleencoder
+        titleencoder = self._build_newsencoder(embedding_layer, user_embedding_layer)
+        userencoder = self._build_userencoder(titleencoder, user_embedding_layer)
+        newsencoder = titleencoder
         self.uservertencoder = self._build_uservertencoder(vertencoder)
         self.vertencoder = vertencoder
 
-        user_present = self.userencoder([his_input_title, user_indexes])
-        news_present = layers.TimeDistributed(self.newsencoder)(pred_input_title)
-        news_present_one = self.newsencoder(pred_title_one_reshape)
+        user_present = userencoder([his_input_title, user_indexes])
+
+        news_present = layers.TimeDistributed(newsencoder)(pred_title_uindex)
+        news_present_one = newsencoder(pred_title_uindex_one)
 
         uservert_present,uservert_present_individual = self.uservertencoder(his_input_title)
         newsvert_present = layers.TimeDistributed(self.vertencoder)(pred_input_title)
@@ -113,8 +131,8 @@ class LSTURGroupModelDECCLImprsVertWAKLGL(LSTURModelDECCLImprsVertWAKLGL):
         # pred_one = GroupScore(hparams.eval_clusters)([pred_one,pred_input_vert_one])
         
 
-        model = keras.Model([user_indexes,his_input_title, pred_input_title], [preds,newsvert_present,uservert_present_individual])
-        scorer = keras.Model([user_indexes,his_input_title, pred_input_title_one], [pred_one,newsvert_present_one,uservert_present_individual])
+        model = keras.Model([user_indexes, his_input_title, pred_input_title], [preds,newsvert_present,uservert_present_individual])
+        scorer = keras.Model([user_indexes, his_input_title, pred_input_title_one], [pred_one,newsvert_present_one])
               
         return model, scorer
 
@@ -138,13 +156,11 @@ if __name__ == "__main__":
     parser.add_argument('--dec_untrained', dest='dec_raw', action='store_true', help='use untrained DEC')
     parser.set_defaults(dec_pretrain=False)
     parser.set_defaults(dec_raw=False)
-    parser.add_argument('-r', dest='resume_last_epoch', action='store_true', help='resume training from last checkpoint')
-    parser.set_defaults(resume_last_epoch=False)
     args = parser.parse_args()
     print(args)
 
     seed = 42
-    hparams,file_paths=nrms_init_params(args,script_file=__file__,seed=seed,init_dec=True,model_type="lstur")
+    hparams,file_paths=nrms_init_params(args,script_file=__file__,seed=seed,init_dec=True,model_type="npa")
 
     train_news_file     = file_paths["train_news_file"]
     train_behaviors_file= file_paths["train_behaviors_file"] 
@@ -154,8 +170,8 @@ if __name__ == "__main__":
     test_behaviors_file = file_paths["test_behaviors_file"] 
 
     iterator = catiterator
-
-    model = LSTURGroupModelDECCLImprsVertWAKLGL(hparams, iterator, seed=seed,dec_raw=args.dec_raw)
+    hparams.title_size= 30
+    model = NPAGroupModelDECCLImprsVertWAKLGL(hparams, iterator, seed=seed,dec_raw=args.dec_raw)
     model.support_quick_scoring=False
     model.val_iterator.batch_size = 512
     model.test_iterator.batch_size = 512
@@ -181,17 +197,20 @@ if __name__ == "__main__":
         res = (f"Test: H={h}, NMI={n}, Clusters:{c}")
         print(res)
         write_eval(hparams.dec_eval_path, res, mode="a")
-    else:
-        start_epoch = None
-        if args.resume_last_epoch:
-            if os.path.exists(hparams.last_epoch_path):
-                start_epoch=int(read(hparams.last_epoch_path)[0])
-                ckpt_path = hparams.model_weights_path.replace(".h5",f"_{start_epoch}.h5")
-                if os.path.exists(ckpt_path):
-                    print(f"Loading Checkpoint from epoch: {start_epoch}")
-                    model.model.load_weights(ckpt_path)
-                    model_eval(model, valid_news_file, valid_behaviors_file, test_news_file, test_behaviors_file, epoch=start_epoch,write_mode="a")
-        start_epoch = 1 if start_epoch is None else start_epoch+1
 
-        # model_eval(model, valid_news_file, valid_behaviors_file, test_news_file, test_behaviors_file, epoch=-1)
-        model.fit(train_news_file, train_behaviors_file, valid_news_file, valid_behaviors_file,test_news_file,test_behaviors_file,start_epoch=start_epoch)
+    # model_eval(model, valid_news_file, valid_behaviors_file, test_news_file, test_behaviors_file, epoch=-1)
+
+    if not args.dec_pretrain:
+        model.fit(train_news_file, train_behaviors_file, valid_news_file, valid_behaviors_file,test_news_file,test_behaviors_file)
+
+        if args.mind_type=="large":
+            test_news_file= valid_news_file.replace("valid","test")
+            test_behaviors_file= valid_behaviors_file.replace("valid","test")
+            model.test_iterator.is_test = True
+            tmp_eval = model.run_slow_eval(
+                test_news_file, test_behaviors_file, model.test_iterator,return_verts=False
+            )
+            group_impr_indexes, group_labels, group_preds, group_gpreds, clusters = tmp_eval
+                    
+            write_prediction_file(hparams.model_weights_path.replace(".h5","_test_preds.txt"),group_impr_indexes, group_preds)
+            write_prediction_file(hparams.model_weights_path.replace(".h5","_test_gpreds.txt"),group_impr_indexes, group_gpreds)

@@ -10,9 +10,9 @@ from init_params import nrms_init_params
 
 
 from baseline.nrms import NRMSModel
-from ganer.nrms_group_wa import NRMSGroupModelDECCLImprsVertWAKLGL
+from clurec.nrms_group_wa import NRMSGroupModelDECCLImprsVertWAKLGL
 from baseline.lstur import LSTURModel
-from ganer.lstur_group_wa import LSTURGroupModelDECCLImprsVertWAKLGL
+from clurec.lstur_group_wa import LSTURGroupModelDECCLImprsVertWAKLGL
 
 mind_type="large"
 model_type="lstur"
